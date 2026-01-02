@@ -99,7 +99,7 @@ class Trainer(object):
                 raise RuntimeError(f"=> no checkpoint found at '{checkpoint_path}'")
             
             print(f"=> Loading checkpoint '{checkpoint_path}'")
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             
             # Load model state
             state_dict = checkpoint['state_dict']
@@ -228,14 +228,19 @@ class Trainer(object):
         print('Loss: %.3f' % test_loss)
         print('IoUs: ', ious)
 
+        # Track best mIoU for logging purposes
         if mIoU > self.best_pred:
             self.best_pred = mIoU
-            self.saver.save_checkpoint({
-                'epoch': epoch,
-                'state_dict': self.model.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'best_pred': self.best_pred
-            }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
+            print(f'New best mIoU: {self.best_pred:.4f}')
+        
+        # Save last checkpoint (always save, regardless of performance)
+        self.saver.save_checkpoint({
+            'epoch': epoch,
+            'state_dict': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'best_pred': self.best_pred
+        }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
+        print(f'Checkpoint saved at epoch {epoch}')
 
     def load_the_best_checkpoint(self):
         checkpoint_path = os.path.join('checkpoints', 
@@ -248,7 +253,7 @@ class Trainer(object):
             )
         
         print(f"Loading checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         
         # Handle both DataParallel and non-DataParallel checkpoints
         state_dict = checkpoint['state_dict']
