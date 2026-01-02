@@ -299,5 +299,5 @@ if __name__ == '__main__':
     # print(torch.cuda.memory_reserved())
     # torch.cuda.empty_cache()
 
-    # train_phase(args)
+    train_phase(args)
     test_phase(args)

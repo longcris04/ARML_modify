@@ -85,19 +85,66 @@ class Trainer(object):
             self.model = self.model.to(self.device)
         # Resuming checkpoint
         self.best_pred = 0.0
+        self.start_epoch = 0
+        self.save_path = args.savepath
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        
+        # Load checkpoint for resuming training
         if args.resume is not None:
-            if not os.path.isfile(args.resume):
-                raise RuntimeError("=> no checkpoint found at '{}'" .format(args.resume))
-            checkpoint = torch.load(args.resume, map_location=self.device)
-            # Load state dict - handle both DataParallel and non-DataParallel checkpoints
+            checkpoint_path = os.path.join('checkpoints', 
+                f'stage2_checkpoint_trained_on_{args.dataset}{args.backbone}{args.loss_type}.pth')
+            
+            if not os.path.isfile(checkpoint_path):
+                raise RuntimeError(f"=> no checkpoint found at '{checkpoint_path}'")
+            
+            print(f"=> Loading checkpoint '{checkpoint_path}'")
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            
+            # Load model state
             state_dict = checkpoint['state_dict']
-            # Remove 'module.' prefix if present (from DataParallel)
             if list(state_dict.keys())[0].startswith('module.'):
                 state_dict = {k[7:]: v for k, v in state_dict.items()}
             self.model.load_state_dict(state_dict, strict=False)
-            # if args.ft:
-            #     self.optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' ".format(args.resume))
+            
+            # Load optimizer state if not fine-tuning
+            if not args.ft:
+                self.optimizer.load_state_dict(checkpoint['optimizer'])
+            
+            # Load epoch and best_pred if available
+            if 'epoch' in checkpoint:
+                self.start_epoch = checkpoint['epoch'] + 1
+                print(f"=> Resuming from epoch {self.start_epoch}")
+            
+            if 'best_pred' in checkpoint:
+                self.best_pred = checkpoint['best_pred']
+                print(f"=> Previous best mIoU: {self.best_pred:.4f}")
+            
+            print(f"=> Successfully loaded checkpoint '{checkpoint_path}'")
+        
+
+
+
+
+
+
+
+        # if args.resume is not None:
+            # if not os.path.isfile(args.resume):
+            #     raise RuntimeError("=> no checkpoint found at '{}'" .format(args.resume))
+            
+            # checkpoint = torch.load(args.resume, map_location=self.device)
+            # # Load state dict - handle both DataParallel and non-DataParallel checkpoints
+            # state_dict = checkpoint['state_dict']
+            # # Remove 'module.' prefix if present (from DataParallel)
+            # if list(state_dict.keys())[0].startswith('module.'):
+            #     state_dict = {k[7:]: v for k, v in state_dict.items()}
+            # self.model.load_state_dict(state_dict, strict=False)
+            # # if args.ft:
+            # #     self.optimizer.load_state_dict(checkpoint['optimizer'])
+            # print("=> loaded checkpoint '{}' ".format(args.resume))
+
+        
 
     def training(self, epoch):
         train_loss = 0.0
@@ -184,12 +231,33 @@ class Trainer(object):
         if mIoU > self.best_pred:
             self.best_pred = mIoU
             self.saver.save_checkpoint({
+                'epoch': epoch,
                 'state_dict': self.model.state_dict(),
-                'optimizer': self.optimizer.state_dict()
+                'optimizer': self.optimizer.state_dict(),
+                'best_pred': self.best_pred
             }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
+
     def load_the_best_checkpoint(self):
-        checkpoint = torch.load('checkpoints/stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
-        self.model.load_state_dict(checkpoint['state_dict'], strict=False)
+        checkpoint_path = os.path.join('checkpoints', 
+            f'stage2_checkpoint_trained_on_{self.args.dataset}{self.args.backbone}{self.args.loss_type}.pth')
+        
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(
+                f"Checkpoint not found at: {checkpoint_path}\n"
+                f"Please ensure you have trained the model first or provide the correct checkpoint path."
+            )
+        
+        print(f"Loading checkpoint from: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Handle both DataParallel and non-DataParallel checkpoints
+        state_dict = checkpoint['state_dict']
+        if list(state_dict.keys())[0].startswith('module.'):
+            state_dict = {k[7:]: v for k, v in state_dict.items()}
+        
+        self.model.load_state_dict(state_dict, strict=False)
+        print(f"Successfully loaded checkpoint from: {checkpoint_path}")
+        
     def test(self, epoch, Is_GM):
         self.load_the_best_checkpoint()
         self.model.eval()
@@ -310,12 +378,17 @@ def main():
     parser.add_argument('--gpu-ids', type=str, default='0')
     parser.add_argument('--seed', type=int, default=1, metavar='S')
     # checking point
-    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint or "True" to auto-resume')
     parser.add_argument('--checkname', type=str, default='deeplab-resnet')
-    parser.add_argument('--ft', action='store_true', default=False)
+    parser.add_argument('--ft', action='store_true', default=False, help='Fine-tune mode: do not load optimizer state')
     parser.add_argument('--eval-interval', type=int, default=1)
     parser.add_argument('--csv_dir', type=str, default='./result', help='Directory to save CSV results')
+    parser.add_argument('--continue-training', action='store_true', default=False, help='Continue training from last checkpoint')
     args = parser.parse_args()
+    
+    # Auto-set resume if continue-training is enabled
+    if args.continue_training:
+        args.resume = 'True'
     
     # Force GPU selection
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
@@ -329,11 +402,18 @@ def main():
     args.sync_bn = False
     print(args)
     trainer = Trainer(args)
-    for epoch in range(trainer.args.epochs):
-        # pass
+    
+    # Training loop - will start from start_epoch if resuming
+    for epoch in range(trainer.start_epoch, args.epochs):
         trainer.training(epoch)
-        trainer.validation(epoch)
-    trainer.test(epoch, args.Is_GM)
+        if epoch % args.eval_interval == 0:
+            trainer.validation(epoch)
+    
+    # Run final test with best checkpoint
+    print("\n" + "="*50)
+    print("Training completed. Running final test...")
+    print("="*50)
+    trainer.test(args.epochs - 1, args.Is_GM)
     trainer.writer.close()
 
 if __name__ == "__main__":
