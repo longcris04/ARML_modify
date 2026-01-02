@@ -196,8 +196,7 @@ def train_phase(args):
                       'Fin:%s' % (timer.str_est_finish()),
                       flush=True)
             
-            if iter == 3:
-                break
+        
         
         pbar.close()
         if model.gama > 0.65:

@@ -1,3 +1,3 @@
-python 1_train_stage1.py --dataset bcss --gpu 5 --trainroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/train --batch_size 64 --testroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/test --max_epoches 20 --weights ../ARML/init_weights/ilsvrc-cls_rna-a1_cls1000_ep-0001.params
-python 2_generate_PM.py --dataroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS --dataset bcss --gpu 1
-python 3_train_stage2.py --dataset bcss --dataroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS --epochs 1 --batch-size 64 --gpu-ids 4 --gpu 4
+python 1_train_stage1.py --dataset bcss --gpu 4 --trainroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/train --batch_size 32 --testroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/test --max_epoches 20 --weights ../ARML/init_weights/ilsvrc-cls_rna-a1_cls1000_ep-0001.params
+python 2_generate_PM.py --dataroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS --dataset bcss --gpu 4
+python 3_train_stage2.py --dataset bcss --dataroot /mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS --epochs 4 --batch-size 32 --gpu-ids 4 --gpu 4

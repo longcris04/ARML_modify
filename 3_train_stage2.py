@@ -72,26 +72,29 @@ class Trainer(object):
         self.scheduler = LR_Scheduler(args.lr_scheduler, args.lr,
                                             args.epochs, len(self.train_loader))
 
-        # Using cuda
+        # Print model parameters
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Segmentation Model - Total parameters: {total_params:,}")
+        print(f"Segmentation Model - Trainable parameters: {trainable_params:,}")
+        
+        # Setup device for single GPU training
+        self.device = torch.device(f'cuda:{args.gpu}' if args.cuda else 'cpu')
+        print(f"Using device: {self.device}")
         if args.cuda:
-            self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
-            patch_replication_callback(self.model)
-            self.model = self.model.cuda()
+            self.model = self.model.to(self.device)
         # Resuming checkpoint
         self.best_pred = 0.0
         if args.resume is not None:
             if not os.path.isfile(args.resume):
                 raise RuntimeError("=> no checkpoint found at '{}'" .format(args.resume))
-            checkpoint = torch.load(args.resume)
-            # if args.cuda:
-            #     W = checkpoint['state_dict']
-            #     if not args.ft:
-            #         del W['decoder.last_conv.8.weight']
-            #         del W['decoder.last_conv.8.bias']
-            #     self.model.module.load_state_dict(W, strict=False)
-            # else:
-            #     self.model.load_state_dict(checkpoint['state_dict'])
-            self.model.module.load_state_dict(checkpoint['state_dict'])
+            checkpoint = torch.load(args.resume, map_location=self.device)
+            # Load state dict - handle both DataParallel and non-DataParallel checkpoints
+            state_dict = checkpoint['state_dict']
+            # Remove 'module.' prefix if present (from DataParallel)
+            if list(state_dict.keys())[0].startswith('module.'):
+                state_dict = {k[7:]: v for k, v in state_dict.items()}
+            self.model.load_state_dict(state_dict, strict=False)
             # if args.ft:
             #     self.optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' ".format(args.resume))
@@ -104,15 +107,18 @@ class Trainer(object):
         for i, sample in enumerate(tbar):
             image, target, target_a, target_b = sample['image'], sample['label'], sample['label_a'], sample['label_b']
             if self.args.cuda:
-                image, target, target_a, target_b = image.cuda(), target.cuda(), target_a.cuda(), target_b.cuda()
+                image = image.to(self.device)
+                target = target.to(self.device)
+                target_a = target_a.to(self.device)
+                target_b = target_b.to(self.device)
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
             output2 = self.model(image)
             output3 = self.model(image)
-            one = torch.ones((output.shape[0],1,224,224)).cuda()
-            one2 = torch.ones((output2.shape[0],1,224,224)).cuda()
-            one3 = torch.ones((output3.shape[0],1,224,224)).cuda()
+            one = torch.ones((output.shape[0],1,224,224), device=self.device)
+            one2 = torch.ones((output2.shape[0],1,224,224), device=self.device)
+            one3 = torch.ones((output3.shape[0],1,224,224), device=self.device)
             output = torch.cat([output,(100 * one * (target==4).unsqueeze(dim = 1))],dim = 1)
             output2 = torch.cat([output2,(100 * one2 * (target==4).unsqueeze(dim = 1))],dim = 1)
             output3 = torch.cat([output3,(100 * one3 * (target==4).unsqueeze(dim = 1))],dim = 1)
@@ -145,7 +151,8 @@ class Trainer(object):
         for i, sample in enumerate(tbar):
             image, target = sample[0]['image'], sample[0]['label']
             if self.args.cuda:
-                image, target = image.cuda(), target.cuda()
+                image = image.to(self.device)
+                target = target.to(self.device)
             with torch.no_grad():
                 output = self.model(image)
             pred = output.data.cpu().numpy()
@@ -177,12 +184,12 @@ class Trainer(object):
         if mIoU > self.best_pred:
             self.best_pred = mIoU
             self.saver.save_checkpoint({
-                'state_dict': self.model.module.state_dict(),
+                'state_dict': self.model.state_dict(),
                 'optimizer': self.optimizer.state_dict()
             }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
     def load_the_best_checkpoint(self):
         checkpoint = torch.load('checkpoints/stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
-        self.model.module.load_state_dict(checkpoint['state_dict'], strict=False)
+        self.model.load_state_dict(checkpoint['state_dict'], strict=False)
     def test(self, epoch, Is_GM):
         self.load_the_best_checkpoint()
         self.model.eval()
@@ -193,7 +200,8 @@ class Trainer(object):
             image, target = sample[0]['image'], sample[0]['label']
             image_name = sample[-1][0].split('/')[-1].replace('.png', '')
             if self.args.cuda:
-                image, target = image.cuda(), target.cuda()
+                image = image.to(self.device)
+                target = target.to(self.device)
             with torch.no_grad():
                 output = self.model(image)
                 if Is_GM:
@@ -313,21 +321,12 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     print(f"Setting CUDA_VISIBLE_DEVICES to GPU {args.gpu}")
     
-    # After setting CUDA_VISIBLE_DEVICES, update gpu_ids to use device 0
-    args.gpu_ids = '0'
-    
+    # After setting CUDA_VISIBLE_DEVICES, the visible GPU becomes device 0
+    args.gpu = 0
     args.cuda = not args.no_cuda and torch.cuda.is_available()
-    if args.cuda:
-        try:
-            args.gpu_ids = [int(s) for s in args.gpu_ids.split(',')]
-        except ValueError:
-            raise ValueError('Argument --gpu_ids must be a comma-separated list of integers only')
-
-    if args.sync_bn is None:
-        if args.cuda and len(args.gpu_ids) > 1:
-            args.sync_bn = True
-        else:
-            args.sync_bn = False
+    
+    # Single GPU training - no need for sync_bn
+    args.sync_bn = False
     print(args)
     trainer = Trainer(args)
     for epoch in range(trainer.args.epochs):
