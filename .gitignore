@@ -82,4 +82,6 @@ Thumbs.db
 .cache/
 *.sh
 visualization.py
+run_bcss.sh 
+run_luad.sh 
 
