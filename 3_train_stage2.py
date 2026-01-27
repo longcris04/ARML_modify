@@ -254,7 +254,10 @@ class Trainer(object):
         
         print(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        
+        print("-"*50)
+        print(f"checkpoint epoch: {checkpoint["epoch"]}")
+        print(f"checkpoint best_pred: {checkpoint["best_pred"]}")
+        print("-"*50)
         # Handle both DataParallel and non-DataParallel checkpoints
         state_dict = checkpoint['state_dict']
         if list(state_dict.keys())[0].startswith('module.'):
@@ -267,6 +270,31 @@ class Trainer(object):
         self.load_the_best_checkpoint()
         self.model.eval()
         self.evaluator.reset()
+        
+        # Create directory for saving predicted masks
+        save_pred_path = os.path.join(self.args.dataroot, "test","pred", "stage2")
+        if not os.path.exists(save_pred_path):
+            os.makedirs(save_pred_path)
+            print(f"Created directory for saving predictions: {save_pred_path}")
+        
+        # Setup palette for visualization
+        if self.args.dataset == 'luad':
+            palette = [0]*15
+            palette[0:3] = [205,51,51]
+            palette[3:6] = [0,255,0]
+            palette[6:9] = [65,105,225]
+            palette[9:12] = [255,165,0]
+            palette[12:15] = [255, 255, 255]
+        elif self.args.dataset == 'bcss':
+            palette = [0]*15
+            palette[0:3] = [255, 0, 0]
+            palette[3:6] = [0,255,0]
+            palette[6:9] = [0,0,255]
+            palette[9:12] = [153, 0, 255]
+            palette[12:15] = [255, 255, 255]
+        else:
+            palette = None
+        
         tbar = tqdm(self.test_loader, desc='\r')
         test_loss = 0.0
         for i, sample in enumerate(tbar):
@@ -289,9 +317,21 @@ class Trainer(object):
             if Is_GM:
                 pred = pred*(pred_cls.unsqueeze(dim=2).unsqueeze(dim=3).numpy())
             target = target.cpu().numpy()
+            
             pred = np.argmax(pred, axis=1)
+            
+            # print(f"pred shape, dtype, min, max, unique before saving: {pred.shape}, {pred.dtype}, {np.min(pred)}, {np.max(pred)}, {np.unique(pred)}")
+            # exit(0)
+            # Save predicted mask as image
+            pred_mask = pred[0].astype(np.uint8)
+            pred_img = Image.fromarray(pred_mask, "P")
+            if palette is not None:
+                pred_img.putpalette(palette)
+            pred_img.save(os.path.join(save_pred_path, f'{image_name}.png'), format='PNG')
+
             ## cls 4 is exclude
             pred[target==4]=4
+            
             self.evaluator.add_batch(target, pred)
 
         Acc = self.evaluator.Pixel_Accuracy()
@@ -314,6 +354,7 @@ class Trainer(object):
         print('Loss: %.3f' % test_loss)
         print('IoUs: ', ious)
         print('Dices: ', dices)
+        print(f'Predicted masks saved to: {save_pred_path}')
         
         # Save results to CSV
         csv_dir = getattr(self.args, 'csv_dir', './result')
@@ -321,6 +362,131 @@ class Trainer(object):
             os.makedirs(csv_dir)
         
         csv_path = os.path.join(csv_dir, f'stage2_test_results_on_{self.args.dataset}.csv')
+        
+        # Read existing CSV or create new one
+        if os.path.exists(csv_path):
+            result_df = pd.read_csv(csv_path, index_col=0)
+        else:
+            result_df = pd.DataFrame(columns=['iou_0', 'iou_1', 'iou_2', 'iou_3', 'miou',
+                                              'dice_0', 'dice_1', 'dice_2', 'dice_3', 'mdice'])
+        
+        # Prepare new row - get first 4 classes (excluding background/ignore class)
+        iou_0 = ious[0] 
+        iou_1 = ious[1] 
+        iou_2 = ious[2] 
+        iou_3 = ious[3] 
+        
+        dice_0 = dices[0]
+        dice_1 = dices[1] 
+        dice_2 = dices[2] 
+        dice_3 = dices[3] 
+        
+        new_row = pd.DataFrame({
+            'iou_0': [iou_0], 'iou_1': [iou_1], 'iou_2': [iou_2], 'iou_3': [iou_3],
+            'miou': [mIoU],
+            'dice_0': [dice_0], 'dice_1': [dice_1], 'dice_2': [dice_2], 'dice_3': [dice_3],
+            'mdice': [DSC]
+        })
+        
+        # Append to dataframe
+        result_df = pd.concat([result_df, new_row], ignore_index=True)
+        
+        # Save to CSV
+        result_df.to_csv(csv_path, index=True)
+        print(f"\nResults saved to: {csv_path}")
+
+    def val_with_save(self, epoch, Is_GM):
+        """Validation with mask saving - similar to test but for validation set"""
+        self.load_the_best_checkpoint()
+        self.model.eval()
+        self.evaluator.reset()
+        
+        # Create directory for saving predicted masks
+        save_pred_path = os.path.join(self.args.dataroot, "val","pred", "stage2")
+        if not os.path.exists(save_pred_path):
+            os.makedirs(save_pred_path)
+            print(f"Created directory for saving predictions: {save_pred_path}")
+        
+        # Setup palette for visualization
+        if self.args.dataset == 'luad':
+            palette = [0]*15
+            palette[0:3] = [205,51,51]
+            palette[3:6] = [0,255,0]
+            palette[6:9] = [65,105,225]
+            palette[9:12] = [255,165,0]
+            palette[12:15] = [255, 255, 255]
+        elif self.args.dataset == 'bcss':
+            palette = [0]*15
+            palette[0:3] = [255, 0, 0]
+            palette[3:6] = [0,255,0]
+            palette[6:9] = [0,0,255]
+            palette[9:12] = [153, 0, 255]
+            palette[12:15] = [255, 255, 255]
+        else:
+            palette = None
+        
+        tbar = tqdm(self.val_loader, desc='\r')
+        test_loss = 0.0
+        for i, sample in enumerate(tbar):
+            image, target = sample[0]['image'], sample[0]['label']
+            image_name = sample[-1][0].split('/')[-1].replace('.png', '')
+            if self.args.cuda:
+                image = image.to(self.device)
+                target = target.to(self.device)
+            with torch.no_grad():
+                output = self.model(image)
+                if Is_GM:
+                    output = self.model(image)
+                    _,y_cls = self.model_stage1.forward_cam(image)
+                    y_cls = y_cls.cpu().data
+                    pred_cls = (y_cls > 0.5)
+            pred = output.data.cpu().numpy()
+            if Is_GM:
+                pred = pred*(pred_cls.unsqueeze(dim=2).unsqueeze(dim=3).numpy())
+            target = target.cpu().numpy()
+            
+            pred = np.argmax(pred, axis=1)
+            
+            # Save predicted mask as image
+            pred_mask = pred[0].astype(np.uint8)
+            pred_img = Image.fromarray(pred_mask, "P")
+            if palette is not None:
+                pred_img.putpalette(palette)
+            pred_img.save(os.path.join(save_pred_path, f'{image_name}.png'), format='PNG')
+
+            ## cls 4 is exclude
+            pred[target==4]=4
+            
+            self.evaluator.add_batch(target, pred)
+
+        Acc = self.evaluator.Pixel_Accuracy()
+        Acc_class = self.evaluator.Pixel_Accuracy_Class()
+        mIoU = self.evaluator.Mean_Intersection_over_Union()
+        ious = self.evaluator.Intersection_over_Union()
+        FWIoU = self.evaluator.Frequency_Weighted_Intersection_over_Union()
+        DSC = self.evaluator.Dice_Similarity_Coefficient()
+        dices = self.evaluator.Dice_Coefficient_Per_Class()
+        
+        self.writer.add_scalar('val_with_save/total_loss_epoch', test_loss, epoch)
+        self.writer.add_scalar('val_with_save/mIoU', mIoU, epoch)
+        self.writer.add_scalar('val_with_save/Acc', Acc, epoch)
+        self.writer.add_scalar('val_with_save/Acc_class', Acc_class, epoch)
+        self.writer.add_scalar('val_with_save/fwIoU', FWIoU, epoch)
+        self.writer.add_scalar('val_with_save/DSC', DSC, epoch)
+        print('Validation (with mask saving):')
+        print('[numImages: %5d]' % (i * self.args.batch_size + image.data.shape[0]))
+        print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}, DSC: {}".format(Acc, Acc_class, mIoU, FWIoU, DSC))
+        print('Loss: %.3f' % test_loss)
+        print('IoUs: ', ious)
+        print('Dices: ', dices)
+        print(f'Predicted masks saved to: {save_pred_path}')
+        
+        # Save results to CSV
+        csv_dir = getattr(self.args, 'csv_dir', './result')
+        if not os.path.exists(csv_dir):
+            os.makedirs(csv_dir)
+        
+        csv_path = os.path.join(csv_dir, f'stage2_val_results_on_{self.args.dataset}.csv')
         
         # Read existing CSV or create new one
         if os.path.exists(csv_path):
@@ -362,6 +528,7 @@ def main():
     parser.add_argument('--out-stride', type=int, default=16)
     parser.add_argument('--Is_GM', type=bool, default=False, help='Enable the Gate mechanism in test phase')
     parser.add_argument('--dataroot', type=str, default='datasets/BCSS-WSSS/')
+    parser.add_argument('--train_img_path', type=str, default=None, help='Custom path to training images (if None, uses dataroot/train/img/)')
     parser.add_argument('--dataset', type=str, default='bcss')
     parser.add_argument('--savepath', type=str, default='checkpoints/')
     parser.add_argument('--workers', type=int, default=0, metavar='N')
@@ -419,7 +586,14 @@ def main():
     print("Training completed. Running final test...")
     print("="*50)
     trainer.test(args.epochs - 1, args.Is_GM)
-    trainer.writer.close()
+    
+    # Run validation with mask saving
+    # print("\n" + "="*50)
+    # print("Running validation with mask saving...")
+    # print("="*50)
+    # trainer.val_with_save(args.epochs - 1, args.Is_GM)
+    
+    # trainer.writer.close()
 
 if __name__ == "__main__":
     torch.cuda.empty_cache()

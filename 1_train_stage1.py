@@ -236,7 +236,7 @@ def test_phase(args):
                                           'dice_0', 'dice_1', 'dice_2', 'dice_3', 'mdice'])
     
     # Run inference
-    score = infer(model, args.testroot, args.n_class, args)
+    score = infer(model, args.testroot, args.valroot, args.n_class, args)
     print(score)
     
     # Extract metrics
@@ -287,7 +287,9 @@ if __name__ == '__main__':
     parser.add_argument("--n_class", default=4, type=int)
     parser.add_argument("--weights", default='init_weights/ilsvrc-cls_rna-a1_cls1000_ep-0001.params', type=str)
     parser.add_argument("--trainroot", default='datasets/BCSS-WSSS/train/', type=str)
+    parser.add_argument("--dataroot", default='datasets/BCSS-WSSS/', type=str)
     parser.add_argument("--testroot", default='datasets/BCSS-WSSS/test/', type=str)
+    parser.add_argument("--valroot", default='datasets/BCSS-WSSS/val/', type=str)
     parser.add_argument("--save_folder", default='checkpoints/',  type=str)
     parser.add_argument("--init_gama", default=1, type=float)
     parser.add_argument("--dataset", default='bcss', type=str)

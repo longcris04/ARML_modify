@@ -58,6 +58,7 @@ script
 # Logs and results
 logs/
 result/
+result_old/
 *.log
 result.txt
 result_bcss.txt
@@ -80,3 +81,5 @@ Thumbs.db
 *.tmp
 .cache/
 *.sh
+visualization.py
+

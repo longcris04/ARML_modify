@@ -30,7 +30,34 @@ def fuse_mask_and_img(mask, img):
     Combine = cv2.addWeighted(mask,0.3,img,0.7,0)
     return Combine
 
-def infer(model, dataroot, n_class, args):
+def infer(model, testroot,valroot, n_class, args):
+    
+    
+    save_mask_path_test = os.path.join(testroot,'pred','stage1')
+    if not os.path.exists(save_mask_path_test):
+        os.makedirs(save_mask_path_test)
+        
+    # save_mask_path_val = os.path.join(valroot,'pred','stage1')
+    # if not os.path.exists(save_mask_path_val):
+    #     os.makedirs(save_mask_path_val)
+
+    if args.dataset == 'luad':
+        palette = [0]*15
+        palette[0:3] = [205,51,51]
+        palette[3:6] = [0,255,0]
+        palette[6:9] = [65,105,225]
+        palette[9:12] = [255,165,0]
+        palette[12:15] = [255, 255, 255]
+    elif args.dataset == 'bcss':
+        palette = [0]*15
+        palette[0:3] = [255, 0, 0]
+        palette[3:6] = [0,255,0]
+        palette[6:9] = [0,0,255]
+        palette[9:12] = [153, 0, 255]
+        palette[12:15] = [255, 255, 255]
+
+    
+
     model.eval()
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     # print(f"in infer")
@@ -42,7 +69,7 @@ def infer(model, dataroot, n_class, args):
     gt_list = []    
     bg_list = []
     transform = transforms.Compose([transforms.ToTensor()]) 
-    infer_dataset = Stage1_InferDataset(data_path=os.path.join(dataroot,'img'),transform=transform)
+    infer_dataset = Stage1_InferDataset(data_path=os.path.join(testroot,'img'),transform=transform)
     # print(f"len infer dataset: {len(infer_dataset)}")
     # exit(0)
     infer_data_loader = DataLoader(infer_dataset,
@@ -62,7 +89,7 @@ def infer(model, dataroot, n_class, args):
         img_name = img_name[0].split('\\')[-1]
         # print(img_name)
 
-        img_path = os.path.join(os.path.join(dataroot,'img'),img_name+'.png')
+        img_path = os.path.join(os.path.join(testroot,'img'),img_name+'.png')
         orig_img = np.asarray(Image.open(img_path))
         orig_img_size = orig_img.shape[:2]
 
@@ -77,6 +104,11 @@ def infer(model, dataroot, n_class, args):
                     
                 cam = F.upsample(cam, orig_img_size, mode='bilinear', align_corners=False)[0]
                 cam = cam.cpu().numpy() * label.clone().view(4, 1, 1).numpy()
+
+                # print(f"CAM shape, dtype, min, mean, max: {cam.shape}, {cam.dtype}, {np.min(cam)}, {np.mean(cam)}, {np.max(cam)}")
+                # print(f"Label shape, dtype, min, mean, max: {label.shape}, {label.dtype}, {torch.min(label)}, {torch.mean(label)}, {torch.max(label)}")
+                # print(f"EXIT HERE!")
+                # exit(0)
                 return cam, label
 
         thread_pool = pyutils.BatchThreader(_work, list(enumerate(img_list.unsqueeze(0))),
@@ -95,8 +127,18 @@ def infer(model, dataroot, n_class, args):
             if iter%100==0:
                 print(iter)
                 # print(img_name)
+            # print(f"Generated seg_map shape, dtype, min, max, unique: {seg_map.shape}, {seg_map.dtype}, {np.min(seg_map)}, {np.max(seg_map)}, {np.unique(seg_map)}")
+            # print(f"EXIT HERE!")
+            # exit(0)
+
+            # save seg_map using Image palette to save path: 
+            seg_map_save_path = os.path.join(save_mask_path_test, img_name + '.png')
+            visualimg  = Image.fromarray(seg_map.astype(np.uint8), "P")
+            visualimg.putpalette(palette)
+            visualimg.save(seg_map_save_path, format='PNG')
+
             cam_list.append(seg_map)
-            gt_map_path = os.path.join(os.path.join(dataroot,'mask'), img_name + '.png')
+            gt_map_path = os.path.join(os.path.join(testroot,'mask'), img_name + '.png')
             # gt_map_path = os.path.join(os.path.join(dataroot,'mask'), '.png')
             gt_map = np.array(Image.open(gt_map_path))
             gt_list.append(gt_map)

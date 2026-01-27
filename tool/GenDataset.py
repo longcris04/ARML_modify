@@ -82,7 +82,11 @@ class Stage2_Dataset(Dataset):
         self.split = split
 
         if self.split   == "train":
-            self._image_dir     = os.path.join(self._base_dir, 'train/img/')
+            # Use custom train image path if provided, otherwise use default
+            if hasattr(args, 'train_img_path') and args.train_img_path:
+                self._image_dir = args.train_img_path
+            else:
+                self._image_dir = os.path.join(self._base_dir, 'train/img/')
             self._cat_dir       = os.path.join(self._base_dir, 'train_PM/PM_res38d_armlbn7/')
             self._cat_dir_a     = os.path.join(self._base_dir, 'train_PM/PM_res38d_armlb5_2')
             self._cat_dir_b     = os.path.join(self._base_dir, 'train_PM/PM_res38d_armlb4_5')

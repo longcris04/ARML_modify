@@ -15,6 +15,7 @@ if __name__ == '__main__':
     parser.add_argument("--network", default="network.resnet38_cls", type=str)
     parser.add_argument("--dataroot", default="datasets/BCSS-WSSS", type=str)
     parser.add_argument("--dataset", default="bcss", type=str)
+    parser.add_argument("--data", default="train", type=str)
     parser.add_argument("--num_workers", default=0, type=int)
     parser.add_argument("--n_class", default=4, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
@@ -46,7 +47,9 @@ if __name__ == '__main__':
         palette[6:9] = [0,0,255]
         palette[9:12] = [153, 0, 255]
         palette[12:15] = [255, 255, 255]
-    PMpath = os.path.join(args.dataroot,'train_PM')
+    data_PM = args.data + "_PM"
+    PMpath = os.path.join(args.dataroot,data_PM)
+
     if not os.path.exists(PMpath):
         os.mkdir(PMpath)
     model = getattr(importlib.import_module("network.resnet38_cls"), 'Net_CAM')(n_class=args.n_class)
@@ -54,23 +57,47 @@ if __name__ == '__main__':
     model.eval()
     model = model.to(device)
     #
+    data = args.data
+    #
     fm = 'b4_5'
     savepath = os.path.join(PMpath,'PM_'+'res38d_arml'+fm)
     print(savepath)
+    # print(savepath_test)
+    # print(savepath_val)
     if not os.path.exists(savepath):
         os.mkdir(savepath)
+    # if not os.path.exists(savepath_test):
+        # os.mkdir(savepath_test)
+    # if not os.path.exists(savepath_val):
+        # os.mkdir(savepath_val)
     create_pseudo_mask(model, args.dataroot, fm, savepath, args.n_class, palette, args.dataset, args)
     ##
     fm = 'b5_2'
     savepath = os.path.join(PMpath,'PM_'+'res38d_arml'+fm)
+    # savepath_test = os.path.join(PMpath_test,'PM_'+'res38d_arml'+fm)
+    # savepath_val =  os.path.join(PMpath_val,'PM_'+'res38d_arml'+fm)
     print(savepath)
+    # print(savepath_test)
+    # print(savepath_val)
     if not os.path.exists(savepath):
         os.mkdir(savepath)
+    # if not os.path.exists(savepath_test):
+    #     os.mkdir(savepath_test)
+    # if not os.path.exists(savepath_val):
+    #     os.mkdir(savepath_val)
     create_pseudo_mask(model, args.dataroot, fm, savepath, args.n_class, palette, args.dataset, args)
     #
     fm = 'bn7'
     savepath = os.path.join(PMpath,'PM_'+'res38d_arml'+fm)
+    # savepath_test = os.path.join(PMpath_test,'PM_'+'res38d_arml'+fm)
+    # savepath_val =  os.path.join(PMpath_val,'PM_'+'res38d_arml'+fm)
     print(savepath)
+    # print(savepath_test)
+    # print(savepath_val)
     if not os.path.exists(savepath):
         os.mkdir(savepath)
+    # if not os.path.exists(savepath_test):
+    #     os.mkdir(savepath_test)
+    # if not os.path.exists(savepath_val):
+    #     os.mkdir(savepath_val)
     create_pseudo_mask(model, args.dataroot, fm, savepath, args.n_class, palette, args.dataset, args)
