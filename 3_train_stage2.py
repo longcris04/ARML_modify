@@ -72,79 +72,29 @@ class Trainer(object):
         self.scheduler = LR_Scheduler(args.lr_scheduler, args.lr,
                                             args.epochs, len(self.train_loader))
 
-        # Print model parameters
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Segmentation Model - Total parameters: {total_params:,}")
-        print(f"Segmentation Model - Trainable parameters: {trainable_params:,}")
-        
-        # Setup device for single GPU training
-        self.device = torch.device(f'cuda:{args.gpu}' if args.cuda else 'cpu')
-        print(f"Using device: {self.device}")
+        # Using cuda
         if args.cuda:
-            self.model = self.model.to(self.device)
+            self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
+            patch_replication_callback(self.model)
+            self.model = self.model.cuda()
         # Resuming checkpoint
         self.best_pred = 0.0
-        self.start_epoch = 0
-        self.save_path = args.savepath
-        if not os.path.exists(self.save_path):
-            os.makedirs(self.save_path)
-        
-        # Load checkpoint for resuming training
         if args.resume is not None:
-            checkpoint_path = os.path.join('checkpoints', 
-                f'stage2_checkpoint_trained_on_{args.dataset}{args.backbone}{args.loss_type}.pth')
-            
-            if not os.path.isfile(checkpoint_path):
-                raise RuntimeError(f"=> no checkpoint found at '{checkpoint_path}'")
-            
-            print(f"=> Loading checkpoint '{checkpoint_path}'")
-            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-            
-            # Load model state
-            state_dict = checkpoint['state_dict']
-            if list(state_dict.keys())[0].startswith('module.'):
-                state_dict = {k[7:]: v for k, v in state_dict.items()}
-            self.model.load_state_dict(state_dict, strict=False)
-            
-            # Load optimizer state if not fine-tuning
-            if not args.ft:
-                self.optimizer.load_state_dict(checkpoint['optimizer'])
-            
-            # Load epoch and best_pred if available
-            if 'epoch' in checkpoint:
-                self.start_epoch = checkpoint['epoch'] + 1
-                print(f"=> Resuming from epoch {self.start_epoch}")
-            
-            if 'best_pred' in checkpoint:
-                self.best_pred = checkpoint['best_pred']
-                print(f"=> Previous best mIoU: {self.best_pred:.4f}")
-            
-            print(f"=> Successfully loaded checkpoint '{checkpoint_path}'")
-        
-
-
-
-
-
-
-
-        # if args.resume is not None:
-            # if not os.path.isfile(args.resume):
-            #     raise RuntimeError("=> no checkpoint found at '{}'" .format(args.resume))
-            
-            # checkpoint = torch.load(args.resume, map_location=self.device)
-            # # Load state dict - handle both DataParallel and non-DataParallel checkpoints
-            # state_dict = checkpoint['state_dict']
-            # # Remove 'module.' prefix if present (from DataParallel)
-            # if list(state_dict.keys())[0].startswith('module.'):
-            #     state_dict = {k[7:]: v for k, v in state_dict.items()}
-            # self.model.load_state_dict(state_dict, strict=False)
-            # # if args.ft:
-            # #     self.optimizer.load_state_dict(checkpoint['optimizer'])
-            # print("=> loaded checkpoint '{}' ".format(args.resume))
-
-        
+            if not os.path.isfile(args.resume):
+                raise RuntimeError("=> no checkpoint found at '{}'" .format(args.resume))
+            checkpoint = torch.load(args.resume)
+            # if args.cuda:
+            #     W = checkpoint['state_dict']
+            #     if not args.ft:
+            #         del W['decoder.last_conv.8.weight']
+            #         del W['decoder.last_conv.8.bias']
+            #     self.model.module.load_state_dict(W, strict=False)
+            # else:
+            #     self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.module.load_state_dict(checkpoint['state_dict'])
+            # if args.ft:
+            #     self.optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' ".format(args.resume))
 
     def training(self, epoch):
         train_loss = 0.0
@@ -154,18 +104,15 @@ class Trainer(object):
         for i, sample in enumerate(tbar):
             image, target, target_a, target_b = sample['image'], sample['label'], sample['label_a'], sample['label_b']
             if self.args.cuda:
-                image = image.to(self.device)
-                target = target.to(self.device)
-                target_a = target_a.to(self.device)
-                target_b = target_b.to(self.device)
+                image, target, target_a, target_b = image.cuda(), target.cuda(), target_a.cuda(), target_b.cuda()
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
             output = self.model(image)
             output2 = self.model(image)
             output3 = self.model(image)
-            one = torch.ones((output.shape[0],1,224,224), device=self.device)
-            one2 = torch.ones((output2.shape[0],1,224,224), device=self.device)
-            one3 = torch.ones((output3.shape[0],1,224,224), device=self.device)
+            one = torch.ones((output.shape[0],1,224,224)).cuda()
+            one2 = torch.ones((output2.shape[0],1,224,224)).cuda()
+            one3 = torch.ones((output3.shape[0],1,224,224)).cuda()
             output = torch.cat([output,(100 * one * (target==4).unsqueeze(dim = 1))],dim = 1)
             output2 = torch.cat([output2,(100 * one2 * (target==4).unsqueeze(dim = 1))],dim = 1)
             output3 = torch.cat([output3,(100 * one3 * (target==4).unsqueeze(dim = 1))],dim = 1)
@@ -183,6 +130,8 @@ class Trainer(object):
             train_loss += loss.item()
             tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
             self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
+            
+            break # break to speed up for debug
 
         self.writer.add_scalar('train/total_loss_epoch', train_loss, epoch)
         print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
@@ -198,8 +147,7 @@ class Trainer(object):
         for i, sample in enumerate(tbar):
             image, target = sample[0]['image'], sample[0]['label']
             if self.args.cuda:
-                image = image.to(self.device)
-                target = target.to(self.device)
+                image, target = image.cuda(), target.cuda()
             with torch.no_grad():
                 output = self.model(image)
             pred = output.data.cpu().numpy()
@@ -228,81 +176,26 @@ class Trainer(object):
         print('Loss: %.3f' % test_loss)
         print('IoUs: ', ious)
 
-        # Track best mIoU for logging purposes
         if mIoU > self.best_pred:
             self.best_pred = mIoU
-            print(f'New best mIoU: {self.best_pred:.4f}')
-        
-        # Save last checkpoint (always save, regardless of performance)
-        self.saver.save_checkpoint({
-            'epoch': epoch,
-            'state_dict': self.model.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'best_pred': self.best_pred
-        }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
-        print(f'Checkpoint saved at epoch {epoch}')
-
+            self.saver.save_checkpoint({
+                'state_dict': self.model.module.state_dict(),
+                'optimizer': self.optimizer.state_dict()
+            }, 'stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
     def load_the_best_checkpoint(self):
-        checkpoint_path = os.path.join('checkpoints', 
-            f'stage2_checkpoint_trained_on_{self.args.dataset}{self.args.backbone}{self.args.loss_type}.pth')
-        
-        if not os.path.isfile(checkpoint_path):
-            raise FileNotFoundError(
-                f"Checkpoint not found at: {checkpoint_path}\n"
-                f"Please ensure you have trained the model first or provide the correct checkpoint path."
-            )
-        
-        print(f"Loading checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        print("-"*50)
-        print(f"checkpoint epoch: {checkpoint["epoch"]}")
-        print(f"checkpoint best_pred: {checkpoint["best_pred"]}")
-        print("-"*50)
-        # Handle both DataParallel and non-DataParallel checkpoints
-        state_dict = checkpoint['state_dict']
-        if list(state_dict.keys())[0].startswith('module.'):
-            state_dict = {k[7:]: v for k, v in state_dict.items()}
-        
-        self.model.load_state_dict(state_dict, strict=False)
-        print(f"Successfully loaded checkpoint from: {checkpoint_path}")
-        
+        checkpoint = torch.load('checkpoints/stage2_checkpoint_trained_on_'+self.args.dataset+self.args.backbone+self.args.loss_type+'.pth')
+        self.model.module.load_state_dict(checkpoint['state_dict'], strict=False)
     def test(self, epoch, Is_GM):
         self.load_the_best_checkpoint()
         self.model.eval()
         self.evaluator.reset()
-        
-        # Create directory for saving predicted masks
-        save_pred_path = os.path.join(self.args.dataroot, "test","pred", "stage2")
-        if not os.path.exists(save_pred_path):
-            os.makedirs(save_pred_path)
-            print(f"Created directory for saving predictions: {save_pred_path}")
-        
-        # Setup palette for visualization
-        if self.args.dataset == 'luad':
-            palette = [0]*15
-            palette[0:3] = [205,51,51]
-            palette[3:6] = [0,255,0]
-            palette[6:9] = [65,105,225]
-            palette[9:12] = [255,165,0]
-            palette[12:15] = [255, 255, 255]
-        elif self.args.dataset == 'bcss':
-            palette = [0]*15
-            palette[0:3] = [255, 0, 0]
-            palette[3:6] = [0,255,0]
-            palette[6:9] = [0,0,255]
-            palette[9:12] = [153, 0, 255]
-            palette[12:15] = [255, 255, 255]
-        else:
-            palette = None
-        
         tbar = tqdm(self.test_loader, desc='\r')
         test_loss = 0.0
         for i, sample in enumerate(tbar):
             image, target = sample[0]['image'], sample[0]['label']
             image_name = sample[-1][0].split('/')[-1].replace('.png', '')
             if self.args.cuda:
-                image = image.to(self.device)
-                target = target.to(self.device)
+                image, target = image.cuda(), target.cuda()
             with torch.no_grad():
                 output = self.model(image)
                 if Is_GM:
@@ -317,21 +210,9 @@ class Trainer(object):
             if Is_GM:
                 pred = pred*(pred_cls.unsqueeze(dim=2).unsqueeze(dim=3).numpy())
             target = target.cpu().numpy()
-            
             pred = np.argmax(pred, axis=1)
-            
-            # print(f"pred shape, dtype, min, max, unique before saving: {pred.shape}, {pred.dtype}, {np.min(pred)}, {np.max(pred)}, {np.unique(pred)}")
-            # exit(0)
-            # Save predicted mask as image
-            pred_mask = pred[0].astype(np.uint8)
-            pred_img = Image.fromarray(pred_mask, "P")
-            if palette is not None:
-                pred_img.putpalette(palette)
-            pred_img.save(os.path.join(save_pred_path, f'{image_name}.png'), format='PNG')
-
             ## cls 4 is exclude
             pred[target==4]=4
-            
             self.evaluator.add_batch(target, pred)
 
         Acc = self.evaluator.Pixel_Accuracy()
@@ -354,7 +235,6 @@ class Trainer(object):
         print('Loss: %.3f' % test_loss)
         print('IoUs: ', ious)
         print('Dices: ', dices)
-        print(f'Predicted masks saved to: {save_pred_path}')
         
         # Save results to CSV
         csv_dir = getattr(self.args, 'csv_dir', './result')
@@ -395,131 +275,6 @@ class Trainer(object):
         result_df.to_csv(csv_path, index=True)
         print(f"\nResults saved to: {csv_path}")
 
-    def val_with_save(self, epoch, Is_GM):
-        """Validation with mask saving - similar to test but for validation set"""
-        self.load_the_best_checkpoint()
-        self.model.eval()
-        self.evaluator.reset()
-        
-        # Create directory for saving predicted masks
-        save_pred_path = os.path.join(self.args.dataroot, "val","pred", "stage2")
-        if not os.path.exists(save_pred_path):
-            os.makedirs(save_pred_path)
-            print(f"Created directory for saving predictions: {save_pred_path}")
-        
-        # Setup palette for visualization
-        if self.args.dataset == 'luad':
-            palette = [0]*15
-            palette[0:3] = [205,51,51]
-            palette[3:6] = [0,255,0]
-            palette[6:9] = [65,105,225]
-            palette[9:12] = [255,165,0]
-            palette[12:15] = [255, 255, 255]
-        elif self.args.dataset == 'bcss':
-            palette = [0]*15
-            palette[0:3] = [255, 0, 0]
-            palette[3:6] = [0,255,0]
-            palette[6:9] = [0,0,255]
-            palette[9:12] = [153, 0, 255]
-            palette[12:15] = [255, 255, 255]
-        else:
-            palette = None
-        
-        tbar = tqdm(self.val_loader, desc='\r')
-        test_loss = 0.0
-        for i, sample in enumerate(tbar):
-            image, target = sample[0]['image'], sample[0]['label']
-            image_name = sample[-1][0].split('/')[-1].replace('.png', '')
-            if self.args.cuda:
-                image = image.to(self.device)
-                target = target.to(self.device)
-            with torch.no_grad():
-                output = self.model(image)
-                if Is_GM:
-                    output = self.model(image)
-                    _,y_cls = self.model_stage1.forward_cam(image)
-                    y_cls = y_cls.cpu().data
-                    pred_cls = (y_cls > 0.5)
-            pred = output.data.cpu().numpy()
-            if Is_GM:
-                pred = pred*(pred_cls.unsqueeze(dim=2).unsqueeze(dim=3).numpy())
-            target = target.cpu().numpy()
-            
-            pred = np.argmax(pred, axis=1)
-            
-            # Save predicted mask as image
-            pred_mask = pred[0].astype(np.uint8)
-            pred_img = Image.fromarray(pred_mask, "P")
-            if palette is not None:
-                pred_img.putpalette(palette)
-            pred_img.save(os.path.join(save_pred_path, f'{image_name}.png'), format='PNG')
-
-            ## cls 4 is exclude
-            pred[target==4]=4
-            
-            self.evaluator.add_batch(target, pred)
-
-        Acc = self.evaluator.Pixel_Accuracy()
-        Acc_class = self.evaluator.Pixel_Accuracy_Class()
-        mIoU = self.evaluator.Mean_Intersection_over_Union()
-        ious = self.evaluator.Intersection_over_Union()
-        FWIoU = self.evaluator.Frequency_Weighted_Intersection_over_Union()
-        DSC = self.evaluator.Dice_Similarity_Coefficient()
-        dices = self.evaluator.Dice_Coefficient_Per_Class()
-        
-        self.writer.add_scalar('val_with_save/total_loss_epoch', test_loss, epoch)
-        self.writer.add_scalar('val_with_save/mIoU', mIoU, epoch)
-        self.writer.add_scalar('val_with_save/Acc', Acc, epoch)
-        self.writer.add_scalar('val_with_save/Acc_class', Acc_class, epoch)
-        self.writer.add_scalar('val_with_save/fwIoU', FWIoU, epoch)
-        self.writer.add_scalar('val_with_save/DSC', DSC, epoch)
-        print('Validation (with mask saving):')
-        print('[numImages: %5d]' % (i * self.args.batch_size + image.data.shape[0]))
-        print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}, DSC: {}".format(Acc, Acc_class, mIoU, FWIoU, DSC))
-        print('Loss: %.3f' % test_loss)
-        print('IoUs: ', ious)
-        print('Dices: ', dices)
-        print(f'Predicted masks saved to: {save_pred_path}')
-        
-        # Save results to CSV
-        csv_dir = getattr(self.args, 'csv_dir', './result')
-        if not os.path.exists(csv_dir):
-            os.makedirs(csv_dir)
-        
-        csv_path = os.path.join(csv_dir, f'stage2_val_results_on_{self.args.dataset}.csv')
-        
-        # Read existing CSV or create new one
-        if os.path.exists(csv_path):
-            result_df = pd.read_csv(csv_path, index_col=0)
-        else:
-            result_df = pd.DataFrame(columns=['iou_0', 'iou_1', 'iou_2', 'iou_3', 'miou',
-                                              'dice_0', 'dice_1', 'dice_2', 'dice_3', 'mdice'])
-        
-        # Prepare new row - get first 4 classes (excluding background/ignore class)
-        iou_0 = ious[0] 
-        iou_1 = ious[1] 
-        iou_2 = ious[2] 
-        iou_3 = ious[3] 
-        
-        dice_0 = dices[0]
-        dice_1 = dices[1] 
-        dice_2 = dices[2] 
-        dice_3 = dices[3] 
-        
-        new_row = pd.DataFrame({
-            'iou_0': [iou_0], 'iou_1': [iou_1], 'iou_2': [iou_2], 'iou_3': [iou_3],
-            'miou': [mIoU],
-            'dice_0': [dice_0], 'dice_1': [dice_1], 'dice_2': [dice_2], 'dice_3': [dice_3],
-            'mdice': [DSC]
-        })
-        
-        # Append to dataframe
-        result_df = pd.concat([result_df, new_row], ignore_index=True)
-        
-        # Save to CSV
-        result_df.to_csv(csv_path, index=True)
-        print(f"\nResults saved to: {csv_path}")
-
 
 def main():
     parser = argparse.ArgumentParser(description="WSSS Stage2")
@@ -527,8 +282,7 @@ def main():
     parser.add_argument('--backbone', type=str, default='psp101_cca_ar_mix_distonly_', choices=['resnet', 'xception', 'drn', 'mobilenet'])
     parser.add_argument('--out-stride', type=int, default=16)
     parser.add_argument('--Is_GM', type=bool, default=False, help='Enable the Gate mechanism in test phase')
-    parser.add_argument('--dataroot', type=str, default='datasets/BCSS-WSSS/')
-    parser.add_argument('--train_img_path', type=str, default=None, help='Custom path to training images (if None, uses dataroot/train/img/)')
+    parser.add_argument('--dataroot', type=str, default='/mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/')
     parser.add_argument('--dataset', type=str, default='bcss')
     parser.add_argument('--savepath', type=str, default='checkpoints/')
     parser.add_argument('--workers', type=int, default=0, metavar='N')
@@ -550,50 +304,40 @@ def main():
     parser.add_argument('--gpu-ids', type=str, default='0')
     parser.add_argument('--seed', type=int, default=1, metavar='S')
     # checking point
-    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint or "True" to auto-resume')
+    parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--checkname', type=str, default='deeplab-resnet')
-    parser.add_argument('--ft', action='store_true', default=False, help='Fine-tune mode: do not load optimizer state')
+    parser.add_argument('--ft', action='store_true', default=False)
     parser.add_argument('--eval-interval', type=int, default=1)
     parser.add_argument('--csv_dir', type=str, default='./result', help='Directory to save CSV results')
-    parser.add_argument('--continue-training', action='store_true', default=False, help='Continue training from last checkpoint')
     args = parser.parse_args()
-    
-    # Auto-set resume if continue-training is enabled
-    if args.continue_training:
-        args.resume = 'True'
     
     # Force GPU selection
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     print(f"Setting CUDA_VISIBLE_DEVICES to GPU {args.gpu}")
     
-    # After setting CUDA_VISIBLE_DEVICES, the visible GPU becomes device 0
-    args.gpu = 0
-    args.cuda = not args.no_cuda and torch.cuda.is_available()
+    # After setting CUDA_VISIBLE_DEVICES, update gpu_ids to use device 0
+    args.gpu_ids = '0'
     
-    # Single GPU training - no need for sync_bn
-    args.sync_bn = False
+    args.cuda = not args.no_cuda and torch.cuda.is_available()
+    if args.cuda:
+        try:
+            args.gpu_ids = [int(s) for s in args.gpu_ids.split(',')]
+        except ValueError:
+            raise ValueError('Argument --gpu_ids must be a comma-separated list of integers only')
+
+    if args.sync_bn is None:
+        if args.cuda and len(args.gpu_ids) > 1:
+            args.sync_bn = True
+        else:
+            args.sync_bn = False
     print(args)
     trainer = Trainer(args)
-    
-    # Training loop - will start from start_epoch if resuming
-    for epoch in range(trainer.start_epoch, args.epochs):
+    for epoch in range(trainer.args.epochs):
+        # pass
         trainer.training(epoch)
-        if epoch % args.eval_interval == 0:
-            trainer.validation(epoch)
-    
-    # Run final test with best checkpoint
-    print("\n" + "="*50)
-    print("Training completed. Running final test...")
-    print("="*50)
-    trainer.test(args.epochs - 1, args.Is_GM)
-    
-    # Run validation with mask saving
-    # print("\n" + "="*50)
-    # print("Running validation with mask saving...")
-    # print("="*50)
-    # trainer.val_with_save(args.epochs - 1, args.Is_GM)
-    
-    # trainer.writer.close()
+        trainer.validation(epoch)
+    trainer.test(epoch, args.Is_GM)
+    trainer.writer.close()
 
 if __name__ == "__main__":
     torch.cuda.empty_cache()

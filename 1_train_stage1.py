@@ -99,13 +99,6 @@ def train_phase(args):
     else:
         print('random init')
     model = model.to(device)
-    
-    # Print model parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-    
     avg_meter = pyutils.AverageMeter(
             'loss',
             'avg_ep_EM',
@@ -127,8 +120,7 @@ def train_phase(args):
         
         for iter, (filename, data, label) in enumerate(pbar):
             img = data
-            # label = label.to(device, non_blocking=True)
-            # label = label.to(device)
+            label = label.to(device, non_blocking=True)
             if ep > 1:
                 # enable_PDA = 1
                 enable_AMM = 1
@@ -141,10 +133,8 @@ def train_phase(args):
                 enable_MARS = 0
             
             # Ensure all tensors are moved to the correct device
-            # img = img.to(device, non_blocking=True)  # Move input data to device
-            # label = label.to(device, non_blocking=True)  # Move labels to device
-            img = img.to(device)
-            label = label.to(device)
+            img = img.to(device, non_blocking=True)  # Move input data to device
+            label = label.to(device, non_blocking=True)  # Move labels to device
 
             # Debugging: Verify tensor devices
             assert img.device == device, f"Input data is on {img.device}, expected {device}"
@@ -195,28 +185,24 @@ def train_phase(args):
                       'lr: %.4f' % (optimizer.param_groups[0]['lr']), 
                       'Fin:%s' % (timer.str_est_finish()),
                       flush=True)
-            
-        
+            # break
+            # if iter == 1:
+            #     break
         
         pbar.close()
         if model.gama > 0.65:
             model.gama = model.gama*0.98
         print('Gama of progressive dropout attention is: ',model.gama)
-        if not os.path.exists(args.save_folder):
-            os.makedirs(args.save_folder)
-
-        save_name = os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'_'+args.model_name+'.pth')
-        torch.save(model.state_dict(), save_name)
+        torch.save(model.state_dict(), os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'_'+args.model_name+'.pth'))
 
 def test_phase(args):
     # For multi-GPU inference, model needs to be on cuda:0
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device for testing: {device}")
     print(f"Note: Model will be replicated across {torch.cuda.device_count()} GPUs for inference")
-    # exit(0)
+    
     model = getattr(importlib.import_module(args.network), 'Net_CAM')(n_class=args.n_class)
     model = model.to(device)
-
     args.weights = os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'_'+args.model_name+'.pth')
     weights_dict = torch.load(args.weights, map_location=device)
     model.load_state_dict(weights_dict, strict=False)
@@ -236,7 +222,7 @@ def test_phase(args):
                                           'dice_0', 'dice_1', 'dice_2', 'dice_3', 'mdice'])
     
     # Run inference
-    score = infer(model, args.testroot, args.valroot, args.n_class, args)
+    score = infer(model, args.testroot, args.n_class, args)
     print(score)
     
     # Extract metrics
@@ -269,7 +255,7 @@ def test_phase(args):
     result_df.to_csv(csv_path, index=True)
     print(f"\nResults saved to: {csv_path}")
 
-    # torch.save(model.state_dict(), os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'_'+args.model_name+'.pth'))
+    torch.save(model.state_dict(), os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'_'+args.model_name+'.pth'))
     # torch.save(model.state_dict(), os.path.join(args.save_folder, 'stage1_checkpoint_trained_on_'+args.dataset+'.pth'))
 
 if __name__ == '__main__':
@@ -286,10 +272,8 @@ if __name__ == '__main__':
     parser.add_argument("--model_name", default='res38d_arml', type=str)
     parser.add_argument("--n_class", default=4, type=int)
     parser.add_argument("--weights", default='init_weights/ilsvrc-cls_rna-a1_cls1000_ep-0001.params', type=str)
-    parser.add_argument("--trainroot", default='datasets/BCSS-WSSS/train/', type=str)
-    parser.add_argument("--dataroot", default='datasets/BCSS-WSSS/', type=str)
-    parser.add_argument("--testroot", default='datasets/BCSS-WSSS/test/', type=str)
-    parser.add_argument("--valroot", default='datasets/BCSS-WSSS/val/', type=str)
+    parser.add_argument("--trainroot", default='/mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/train/', type=str)
+    parser.add_argument("--testroot", default='/mnt/disk1/backup_user/22long.nh/ARML/datasets/BCSS-WSSS/test/', type=str)
     parser.add_argument("--save_folder", default='checkpoints/',  type=str)
     parser.add_argument("--init_gama", default=1, type=float)
     parser.add_argument("--dataset", default='bcss', type=str)
